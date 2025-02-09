@@ -1,0 +1,22 @@
+<!-- templates/dashboard.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spotify Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-900">
+
+    <div class="container mx-auto py-8">
+        <!-- Embed Streamlit App -->
+        <div class="bg-white p-6 rounded-lg shadow mb-8">
+            <h2 class="text-xl font-bold mb-4">Streamlit Insights</h2>
+            <!-- Embed Streamlit page -->
+            <iframe src="http://localhost:8501" width="100%" height="600px" frameborder="0"></iframe>
+        </div>
+    </div>
+
+</body>
+</html>
