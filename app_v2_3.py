@@ -8,6 +8,7 @@ from sentence_transformers import SentenceTransformer
 from pinecone import Pinecone, ServerlessSpec
 import openai
 import os
+from groq import Groq
 from openai import OpenAI
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
@@ -29,7 +30,7 @@ last_fm_redirect_uri = os.getenv('LAST_FM_REDIRECT_URI')
 last_fm_api_key = os.getenv('LAST_FM_API_KEY')
 last_fm_api_secret = os.getenv('LAST_FM_API_SECRET')
 pinecone_api_key = os.getenv('PINECONE_API_KEY')
-open_ai_api_key = os.getenv('OPEN_AI_API')
+open_ai_api_key = os.getenv('GROQ_API_KEY')
 
 model_path = "local_model"
 SCOPE = "user-library-read user-top-read user-read-recently-played playlist-read-private"
@@ -37,7 +38,11 @@ SCOPE = "user-library-read user-top-read user-read-recently-played playlist-read
 with open('scaler_2.pkl', 'rb') as f:
     loaded_scaler = pickle.load(f)
 
-client = OpenAI(
+# client = OpenAI(
+#     api_key=open_ai_api_key,
+# )
+
+client = Groq(
     api_key=open_ai_api_key,
 )
 
@@ -237,7 +242,8 @@ Generate 5 unique tags for the following song based on its name, artist, and alb
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            # model="gpt-4o-mini",
+            model = "llama-3.3-70b-versatile",
             messages=messages,
             max_tokens=50,
             n=1,
@@ -317,20 +323,36 @@ def create_rag_prompt(recommended_songs):
 
     return prompt
 
+def get_system_prompt():
+    system_prompt = """
+    You are a helpful assistant specialized in music recommendation. Given a list of songs, recommend 3 more similar songs. Each song should include its name, artist, and album.
 
+    The recommended songs should be similar to the ones in the list. The output should be in the following format:
+
+    Song: <song_name>   Artist: <artist_name>   Album: <album_name>
+    Song: <song_name>   Artist: <artist_name>   Album: <album_name>
+    Song: <song_name>   Artist: <artist_name>   Album: <album_name>
+
+    INSTRUCTIONS:
+    - Do not include any additional text or formatting.
+    - DO NOT USE ** or __ for bold or italics.
+    - Only list the songs in plain text as shown above.
+"""
+    return system_prompt
 def rag_recommendations(recommended_songs):
     try:
         # Create the RAG prompt based on the context (recommended songs)
         prompt = create_rag_prompt(recommended_songs)
         
         messages = [
-        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "system", "content": get_system_prompt()},
         {"role": "user", "content": prompt}
     ]
         
         # Call OpenAI's API for recommendations
         response = client.chat.completions.create(
-            model="gpt-4o-mini",  # You can also use other engines like gpt-3.5-turbo
+            # model="gpt-4o-mini",  # You can also use other engines like gpt-3.5-turbo
+            model = "llama-3.3-70b-versatile",
             messages=messages,
             max_tokens=150,
             temperature=1
@@ -353,18 +375,22 @@ def extract_song_details(response):
     pattern1 = r"\*\*Song:\*\* (.*?)\s+\*\*Artist:\*\* (.*?)\s+\*\*Album:\*\* (.*?)\s"
     pattern2 = r"\*\*Song\*\*: (.*?)\s+\*\*Artist\*\*: (.*?)\s+\*\*Album\*\*: (.*?)\s"
     pattern3 = r"\*\*Song: (.*?)\*\*\s+\*\*Artist: (.*?)\*\*\s+\*\*Album: (.*?)\*\*"
+    pattern4 = r"Song:\s*(.*?),\s*Artist:\s*(.*?),\s*Album:\s*(.*)"
+
     # Find all matches
     matches1 = re.findall(pattern1, response)
     matches2 = re.findall(pattern2, response)
     matches3 = re.findall(pattern3, response)
+    matches4 = re.findall(pattern4, response)
 
-    matches = matches1 + matches2 + matches3
+    matches = matches1 + matches2 + matches3 + matches4
     
     songs_info = []
     for match in matches:
         song, artist, album = match
         songs_info.append({"Song": song, "Artist": artist, "Album": album})
-        
+    
+    print("Songs_info:", songs_info)
     return songs_info
 
 
@@ -671,6 +697,7 @@ def get_user_playlists():
     })
     
     return {"status": "success", "playlists": playlists}
+
     # playlists = playlists[:4]
 # # Streamlit UI
 # def app():
