@@ -4,6 +4,7 @@ import { useState, useEffect } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import library from "@/components/library"
+import { useToast } from "@/hooks/useToast"
 import { Home, Search, Library, Music, Play, Pause, SkipBack, SkipForward, Volume2, Maximize2, RotateCw } from "lucide-react"
 
 interface Song {
@@ -13,6 +14,7 @@ interface Song {
   album: string
   img_url?: string
   uri?: string
+  error?: string
 }
 
 type playlist = {
@@ -29,7 +31,8 @@ export default function SpotifyPrismatic() {
   const [recentSongs, setRecentSongs] = useState<Song[]>([])
   const [recommendedSongs, setRecommendedSongs] = useState<Song[]>([])
   const [showUnavailable, setShowUnavailable] = useState(false)
-  const [userPlaylists, setUserPlaylists] = useState<playlist[]>([]);
+  const [userPlaylists, setUserPlaylists] = useState<playlist[]>([])
+  const { toast, ToastContainer } = useToast();
 
 
   useEffect(() => {
@@ -42,34 +45,76 @@ export default function SpotifyPrismatic() {
 
   const fetchRecentSongs = async () => {
     try {
-      const response = await fetch("http://localhost:8000/get-recent-songs/")
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+      const response = await fetch(`${apiUrl}/get-recent-songs/`)
       const data = await response.json()
-      setRecentSongs(data.recent_songs)
-    } catch (error) {
+      
+      if (data.status === 'success') {
+        setRecentSongs(data.recent_songs)
+        toast({
+          title: "Recent Songs Updated",
+          description: `Loaded ${data.recent_songs.length} recent tracks`,
+          variant: "success"
+        })
+      } else {
+        throw new Error(data.error || 'Failed to fetch recent songs')
+      }
+    } catch (error: any) {
       console.error("Error fetching recent songs:", error)
+      toast({
+        title: "Error Loading Recent Songs",
+        description: error.message || 'Unable to fetch your recent tracks',
+        variant: "destructive"
+      })
     }
   }
 
 
   const fetchRecommendedSongs = async () => {
     try {
-      const response = await fetch("http://localhost:8000/music-recommender-api/", { method: "POST" })
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+      const response = await fetch(`${apiUrl}/music-recommender-api/`, { method: "POST" })
       const data = await response.json()
-      setRecommendedSongs(data.recommended_songs)
-    } catch (error) {
+      
+      if (data.status === 'success') {
+        setRecommendedSongs(data.recommended_songs)
+        const successfulRecs = data.recommended_songs.filter((song: Song) => song.has_song)
+        toast({
+          title: "New Recommendations",
+          description: `Generated ${successfulRecs.length} personalized recommendations`,
+          variant: "success"
+        })
+      } else {
+        throw new Error(data.error || 'Failed to generate recommendations')
+      }
+    } catch (error: any) {
       console.error("Error fetching recommended songs:", error)
+      toast({
+        title: "Recommendation Error",
+        description: error.message || 'Unable to generate recommendations',
+        variant: "destructive"
+      })
     }
   }
 
   const fetchPlaylists = async () => {
     try {
-      const response = await fetch("http://localhost:8000/get-user-playlists/");
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+      const response = await fetch(`${apiUrl}/get-user-playlists/`);
       const data = await response.json();
+      
       if (data.status === "success") {
         setUserPlaylists(data.playlists);
+      } else {
+        throw new Error(data.error || 'Failed to fetch playlists')
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching playlists:", error);
+      toast({
+        title: "Playlist Error",
+        description: error.message || 'Unable to load playlists',
+        variant: "destructive"
+      })
     }
   };
 
@@ -148,8 +193,13 @@ export default function SpotifyPrismatic() {
             <>
               <div className="flex justify-between items-center mt-6">
                 <h2 className="text-3xl font-bold">Recommended Songs</h2>
-                <Button onClick={fetchRecommendedSongs} variant="ghost" className="flex items-center gap-2 text-sm">
-                <RotateCw className="w-5 h-5" />
+                <Button 
+                  onClick={fetchRecommendedSongs} 
+                  variant="ghost" 
+                  className="flex items-center gap-2 text-sm hover:bg-white/10"
+                  title="Refresh recommendations"
+                >
+                  <RotateCw className="w-5 h-5" />
                 </Button>
                 <span className="absolute left-1/2 -translate-x-1/2 mt-2 px-2 py-1 text-xs text-white bg-gray-800 rounded opacity-0 group-hover:opacity-100 transition-opacity">
                   Update recommended tracks
@@ -173,11 +223,31 @@ export default function SpotifyPrismatic() {
           )}
         </main>
       </div>
+      <ToastContainer />
     </div>
   )
 }
 
 function SongCard({ song, isUnavailable = false }: { song: Song; isUnavailable?: boolean }) {
+  if (isUnavailable || !song.has_song) {
+    return (
+      <Card className="bg-gray-800 border-2 border-red-500/30 opacity-60">
+        <CardContent className="p-4">
+          <div className="relative">
+            <div className="w-full aspect-square bg-gray-700 rounded-md mb-4 flex items-center justify-center">
+              <span className="text-gray-500 text-xs">Unavailable</span>
+            </div>
+          </div>
+          <h3 className="font-semibold truncate text-gray-300">{song.name}</h3>
+          <p className="text-sm text-gray-500 truncate">{song.artist}</p>
+          {song.error && (
+            <p className="text-xs text-red-400 mt-1 truncate">Error: {song.error}</p>
+          )}
+        </CardContent>
+      </Card>
+    )
+  }
+
   return (
     <a href={song.uri} target="_blank" rel="noopener noreferrer" className="group">
     <Card className="bg-gray-900 border-2 hover:bg-gray-800 transition-colors duration-300 group">

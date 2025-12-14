@@ -46,7 +46,8 @@ last_fm_api_secret = os.getenv('LAST_FM_API_SECRET')
 pinecone_api_key = os.getenv('PINECONE_API_KEY')
 open_ai_api_key = os.getenv('GROQ_API_KEY')
 
-model_path = "local_model"
+# Use Hugging Face model for deployment compatibility
+model_name = "sentence-transformers/all-MiniLM-L6-v2"
 SCOPE = "user-library-read user-top-read user-read-recently-played playlist-read-private"
 
 with open('scaler_2.pkl', 'rb') as f:
@@ -76,7 +77,7 @@ if index_name not in pc.list_indexes().names():
 index = pc.Index(index_name)
 
 
-model = SentenceTransformer(model_path)
+model = SentenceTransformer(model_name)
 
 sp = spotipy.Spotify(auth_manager=SpotifyOAuth(client_id=client_id,
                                                 client_secret=client_secret,

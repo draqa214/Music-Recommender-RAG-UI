@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: musicbot-api
+    env: python
+    plan: starter
+    runtime: python-3.12.0
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    rootDir: .
+    envVars:
+      - key: CLIENT_ID
+        sync: false
+      - key: CLIENT_SECRET
+        sync: false
+      - key: REDIRECT_URI
+        sync: false
+      - key: LAST_FM_API_KEY
+        sync: false
+      - key: LAST_FM_API_SECRET
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: PINECONE_API_KEY
+        sync: false
