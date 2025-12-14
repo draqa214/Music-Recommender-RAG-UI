@@ -17,9 +17,23 @@ import re
 from dotenv import load_dotenv
 from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
+import logging
+import traceback
+from datetime import datetime
 
 
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('music_recommender.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -102,43 +116,60 @@ def get_track_details(track):
 
 def fetch_recent_tracks():
     """Fetch the 5 most recently played tracks."""
+    logger.info("Starting to fetch recent tracks from Spotify")
     recent_tracks_details = []
 
-    url = "https://api.spotify.com/v1/me/player/recently-played?limit=20"
-    headers = {
-        "Authorization": f"Bearer {sp.auth_manager.get_access_token()['access_token']}"
-    }
-    response = requests.get(url, headers=headers)
+    try:
+        url = "https://api.spotify.com/v1/me/player/recently-played?limit=20"
+        token = sp.auth_manager.get_access_token()
+        logger.info(f"Got access token: {token['access_token'][:20]}...")
+        
+        headers = {
+            "Authorization": f"Bearer {token['access_token']}"
+        }
+        logger.info("Making request to Spotify API")
+        response = requests.get(url, headers=headers)
     
-    if response.status_code == 200:
-        data = response.json()
-        for item in data['items']:
-            track = item['track']
-            #played_at = item['played_at']
-            track_details = get_track_details(track)
-            if track_details:
-                #track_details["played_at"] = played_at
-                recent_tracks_details.append(track_details)
-                track_id = track['id']
-                # Add the track to the fetched set (to ensure uniqueness)
-                fetched_track_ids.add(track_id)
-            else:  
-                track_id = track['id']
-                track_name = track['name']
-                artist_name = track['artists'][0]['name']
-                album_name = track['album']['name']
-                release_date = track['album']['release_date']
-                popularity = track['popularity']
-                duration_ms = track['duration_ms']
-                recent_tracks_details.append({
-                        "id": track_id,
-                        "name": track_name,
-                        "artist": artist_name,
-                        "album": album_name,
-                        "release_date": release_date,
-                        "popularity": popularity,
-                        "duration_ms": duration_ms,
-                    })       
+        logger.info(f"Spotify API response status: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            logger.info(f"Retrieved {len(data.get('items', []))} recent tracks from Spotify")
+            
+            for item in data['items']:
+                track = item['track']
+                #played_at = item['played_at']
+                track_details = get_track_details(track)
+                if track_details:
+                    #track_details["played_at"] = played_at
+                    recent_tracks_details.append(track_details)
+                    track_id = track['id']
+                    # Add the track to the fetched set (to ensure uniqueness)
+                    fetched_track_ids.add(track_id)
+                else:  
+                    track_id = track['id']
+                    track_name = track['name']
+                    artist_name = track['artists'][0]['name']
+                    album_name = track['album']['name']
+                    release_date = track['album']['release_date']
+                    popularity = track['popularity']
+                    duration_ms = track['duration_ms']
+                    recent_tracks_details.append({
+                            "id": track_id,
+                            "name": track_name,
+                            "artist": artist_name,
+                            "album": album_name,
+                            "release_date": release_date,
+                            "popularity": popularity,
+                            "duration_ms": duration_ms,
+                        })
+                    
+    except Exception as e:
+        logger.error(f"Error fetching recent tracks: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise e
+                    
+    logger.info(f"Returning {len(recent_tracks_details)} recent tracks")
     return recent_tracks_details
 
 
@@ -174,26 +205,35 @@ def fetch_song_info_from_lastfm_by_mbid(track_name, artist_name):
     
 
 def get_enriched_song_data(songs):
+    logger.info(f"Enriching data for {len(songs)} songs")
     enriched_data = {}
+    
     for idx,song in enumerate(songs,1):
-        song_id = song['id']
-        track_name = song.get('name', '')
-        artist_name = song.get('artist', '')
+        try:
+            song_id = song['id']
+            track_name = song.get('name', '')
+            artist_name = song.get('artist', '')
 
-        print(f"Processing Song #{idx}: {track_name} by {artist_name}")
+            logger.info(f"Processing Song #{idx}: {track_name} by {artist_name}")
         
-        # Handle missing track name or artist name
-        if not track_name or not artist_name:
-            enriched_data[song_id] = {**song, "Last.fm Info": {"Error": "Track name or artist name is missing."}}
-            continue
-        
-        # Fetch information from Last.fm for each song using artist's MBID
-        lastfm_info = fetch_song_info_from_lastfm_by_mbid(track_name, artist_name)
-        
-        # Add Last.fm info while keeping the original song data intact
-        enriched_data[song_id] = {**song, "Last.fm Info": lastfm_info}
+            # Handle missing track name or artist name
+            if not track_name or not artist_name:
+                logger.warning(f"Missing track name or artist for song #{idx}")
+                enriched_data[song_id] = {**song, "Last.fm Info": {"Error": "Track name or artist name is missing."}}
+                continue
+            
+            # Fetch information from Last.fm for each song using artist's MBID
+            logger.info(f"Fetching Last.fm info for: {track_name}")
+            lastfm_info = fetch_song_info_from_lastfm_by_mbid(track_name, artist_name)
+            
+            # Add Last.fm info while keeping the original song data intact
+            enriched_data[song_id] = {**song, "Last.fm Info": lastfm_info}
 
-        time.sleep(0.2)
+            time.sleep(0.2)
+            
+        except Exception as e:
+            logger.error(f"Error processing song #{idx} ({track_name}): {str(e)}")
+            enriched_data[song_id] = {**song, "Last.fm Info": {"Error": f"Processing error: {str(e)}"}}
         
     return enriched_data
 
@@ -229,6 +269,8 @@ def extract_songs_info(enriched_recent_tracks):
 
 
 def generate_tags(song_name, artist_name, album_name):
+    logger.info(f"Generating AI tags for: {song_name} by {artist_name}")
+    
     messages = [
         {"role": "system", "content": "You are a helpful assistant specialized in music tagging."},
         {"role": "user", "content": f"""
@@ -252,10 +294,11 @@ Generate 5 unique tags for the following song based on its name, artist, and alb
         )
 
         tags = response.choices[0].message.content.strip().split('\n')
+        logger.info(f"Generated tags for {song_name}: {tags}")
         return tags
     except Exception as e:
-        print(f"Error generating tags: {e}")
-        return None
+        logger.error(f"Error generating tags for {song_name}: {e}")
+        return ["pop", "music", "song", "audio", "track"]  # Return default tags instead of None
     
 
 def appending_tags_generated_from_openai(recent_fetched_tracks):
@@ -272,11 +315,18 @@ def appending_tags_generated_from_openai(recent_fetched_tracks):
 
 
 def create_embedding(text):
-    return model.encode(text, convert_to_tensor=True)
+    embedding = model.encode(text, convert_to_tensor=True)
+    # Move tensor to CPU if it's on MPS device to avoid conversion issues
+    if hasattr(embedding, 'device') and 'mps' in str(embedding.device):
+        embedding = embedding.cpu()
+    return embedding
 
 
 
 def embedding_to_array(embedding):
+    # Ensure tensor is on CPU before converting to numpy
+    if hasattr(embedding, 'device') and 'mps' in str(embedding.device):
+        embedding = embedding.cpu()
     return np.array(embedding.detach().numpy())
 
 
@@ -284,10 +334,31 @@ embedding_columns = ['Artist_embeddings', 'Album_embeddings', 'TopTags_embedding
 numerical_columns = ['Popularity', 'Duration (ms)', 'Playcount', 'Listeners']
 
 def combine_features(row):
+    # Convert embeddings to numpy arrays, ensuring they're on CPU
+    artist_emb = row[embedding_columns[0]]
+    album_emb = row[embedding_columns[1]]
+    tags_emb = row[embedding_columns[2]]
+    
+    # Convert tensors to numpy arrays if needed
+    if hasattr(artist_emb, 'cpu'):
+        artist_emb = artist_emb.cpu().detach().numpy()
+    elif hasattr(artist_emb, 'detach'):
+        artist_emb = artist_emb.detach().numpy()
+    
+    if hasattr(album_emb, 'cpu'):
+        album_emb = album_emb.cpu().detach().numpy()
+    elif hasattr(album_emb, 'detach'):
+        album_emb = album_emb.detach().numpy()
+        
+    if hasattr(tags_emb, 'cpu'):
+        tags_emb = tags_emb.cpu().detach().numpy()
+    elif hasattr(tags_emb, 'detach'):
+        tags_emb = tags_emb.detach().numpy()
+    
     return np.concatenate([
-        row[embedding_columns[0]], 
-        row[embedding_columns[1]], 
-        row[embedding_columns[2]], 
+        artist_emb,
+        album_emb, 
+        tags_emb,
         row[numerical_columns].values
     ])
 
@@ -297,15 +368,23 @@ def calculate_composite_embedding(embeddings):
 
 
 def recommend_songs(query_embeddings, played_song_ids ,top_k = 3):
+    logger.info(f"Querying Pinecone for {top_k} recommendations, excluding {len(played_song_ids)} played songs")
+    
     try:
         query_embeddings = query_embeddings.tolist()
         metadata_filter = {"Song id": {"$nin": played_song_ids}}
+        
+        logger.info(f"Pinecone query - embedding dimension: {len(query_embeddings)}")
         query_response = index.query(vector=query_embeddings, top_k=top_k, include_metadata=True, filter=metadata_filter)
-        #query_response = index.query(vector=query_embeddings, top_k=top_k, include_metadata=True)
-        return query_response["matches"]
+        
+        matches = query_response.get("matches", [])
+        logger.info(f"Pinecone returned {len(matches)} matches")
+        
+        return matches
     except Exception as e:
-        print(f"Error querying Pinecone: {e}")
-        return None
+        logger.error(f"Error querying Pinecone: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return []
     
 
 def create_rag_prompt(recommended_songs):
@@ -340,9 +419,12 @@ def get_system_prompt():
 """
     return system_prompt
 def rag_recommendations(recommended_songs):
+    logger.info(f"Generating RAG recommendations from {len(recommended_songs)} Pinecone matches")
+    
     try:
         # Create the RAG prompt based on the context (recommended songs)
         prompt = create_rag_prompt(recommended_songs)
+        logger.info(f"Created RAG prompt with {len(prompt)} characters")
         
         messages = [
         {"role": "system", "content": get_system_prompt()},
@@ -350,6 +432,7 @@ def rag_recommendations(recommended_songs):
     ]
         
         # Call OpenAI's API for recommendations
+        logger.info("Calling Groq API for RAG recommendations")
         response = client.chat.completions.create(
             # model="gpt-4o-mini",  # You can also use other engines like gpt-3.5-turbo
             model = "llama-3.3-70b-versatile",
@@ -360,12 +443,12 @@ def rag_recommendations(recommended_songs):
 
         # Extract the response text
         recommendations = response.choices[0].message.content.strip()
-        print(f"Recommendations: {recommendations}")
-        # Print or return the recommended songs
+        logger.info(f"RAG recommendations generated: {recommendations[:100]}...")
         return recommendations
 
     except Exception as e:
-        print(f"Error generating recommendations with OpenAI: {e}")
+        logger.error(f"Error generating recommendations with Groq: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return None
     
 
@@ -433,96 +516,141 @@ def extract_song_details(response):
 
 
 def perform_tasks(recent_tracks_details):
-
-    #recent_tracks_details = fetch_recent_tracks()
-    recent_tracks_details = recent_tracks_details[:5]
-    enriched_recent_tracks = get_enriched_song_data(recent_tracks_details)
-
-    df_recent_tracks = extract_songs_info(enriched_recent_tracks)
-    df_recent_tracks = df_recent_tracks.drop(columns=['WikiContent'])
-    recent_fetched_tracks = df_recent_tracks
-
-    generated_tags_for_recent_songs = appending_tags_generated_from_openai(recent_fetched_tracks)
-    processed_tags = [
-        ', '.join(tag.strip() for tag in tags if isinstance(tag, str)) for tags in generated_tags_for_recent_songs
-    ]
-    #print(processed_tags)
-    recent_fetched_tracks['generated_tags'] = processed_tags
-
-
-    recent_fetched_tracks['Artist'] = recent_fetched_tracks['Artist'].astype(str)
-    recent_fetched_tracks['Album'] = recent_fetched_tracks['Album'].astype(str)
-    recent_fetched_tracks['TopTags'] = recent_fetched_tracks['TopTags'].astype(str)
-    recent_fetched_tracks['Artist_embeddings'] = recent_fetched_tracks['Artist'].apply(lambda x: create_embedding(x))
-    recent_fetched_tracks['Album_embeddings'] = recent_fetched_tracks['Album'].apply(lambda x: create_embedding(x))
-    recent_fetched_tracks['TopTags_embeddings'] = recent_fetched_tracks['generated_tags'].apply(lambda x: create_embedding(x))
-
-    numerical_columns = ['Popularity', 'Duration (ms)', 'Playcount', 'Listeners']
-    recent_fetched_tracks[numerical_columns] = loaded_scaler.transform(recent_fetched_tracks[numerical_columns])
-
-    recent_fetched_tracks['combined_features'] = recent_fetched_tracks.apply(combine_features, axis=1)
-
-    embeddings = recent_fetched_tracks['combined_features'].tolist()
-
-    # await check_and_upsert_data(recent_fetched_tracks)
-
-    played_song_ids = []
-    for song_name in recent_fetched_tracks['Song ID']:
-        played_song_ids.append(song_name)
-
+    logger.info(f"Starting perform_tasks with {len(recent_tracks_details)} tracks")
     
+    try:
+        #recent_tracks_details = fetch_recent_tracks()
+        recent_tracks_details = recent_tracks_details[:5]
+        logger.info(f"Processing top 5 tracks: {[track.get('name', 'Unknown') for track in recent_tracks_details]}")
+        
+        logger.info("Step 1: Enriching song data with Last.fm info")
+        enriched_recent_tracks = get_enriched_song_data(recent_tracks_details)
 
-    composite_embedding = calculate_composite_embedding(embeddings=embeddings)
+        logger.info("Step 2: Extracting song information")
+        df_recent_tracks = extract_songs_info(enriched_recent_tracks)
+        df_recent_tracks = df_recent_tracks.drop(columns=['WikiContent'])
+        recent_fetched_tracks = df_recent_tracks
+        logger.info(f"Extracted info for {len(recent_fetched_tracks)} tracks")
+
+        logger.info("Step 3: Generating AI tags")
+        generated_tags_for_recent_songs = appending_tags_generated_from_openai(recent_fetched_tracks)
+        processed_tags = [
+            ', '.join(tag.strip() for tag in tags if isinstance(tag, str)) for tags in generated_tags_for_recent_songs
+        ]
+        logger.info(f"Generated tags: {processed_tags}")
+        recent_fetched_tracks['generated_tags'] = processed_tags
 
 
-    recommended_songs = recommend_songs(composite_embedding, played_song_ids, top_k=3)
+        logger.info("Step 4: Creating embeddings")
+        recent_fetched_tracks['Artist'] = recent_fetched_tracks['Artist'].astype(str)
+        recent_fetched_tracks['Album'] = recent_fetched_tracks['Album'].astype(str)
+        recent_fetched_tracks['TopTags'] = recent_fetched_tracks['TopTags'].astype(str)
+        
+        logger.info("Creating artist embeddings")
+        recent_fetched_tracks['Artist_embeddings'] = recent_fetched_tracks['Artist'].apply(lambda x: create_embedding(x))
+        logger.info("Creating album embeddings")
+        recent_fetched_tracks['Album_embeddings'] = recent_fetched_tracks['Album'].apply(lambda x: create_embedding(x))
+        logger.info("Creating tags embeddings")
+        recent_fetched_tracks['TopTags_embeddings'] = recent_fetched_tracks['generated_tags'].apply(lambda x: create_embedding(x))
 
+        logger.info("Step 5: Scaling numerical features")
+        numerical_columns = ['Popularity', 'Duration (ms)', 'Playcount', 'Listeners']
+        recent_fetched_tracks[numerical_columns] = loaded_scaler.transform(recent_fetched_tracks[numerical_columns])
 
-    openai_recommendations = rag_recommendations(recommended_songs)
+        logger.info("Step 6: Combining features")
+        recent_fetched_tracks['combined_features'] = recent_fetched_tracks.apply(combine_features, axis=1)
 
+        embeddings = recent_fetched_tracks['combined_features'].tolist()
+        logger.info(f"Created {len(embeddings)} combined feature vectors")
 
-    songs_info = extract_song_details(openai_recommendations)
+        # await check_and_upsert_data(recent_fetched_tracks)
 
-    return songs_info
+        played_song_ids = []
+        for song_name in recent_fetched_tracks['Song ID']:
+            played_song_ids.append(song_name)
+        logger.info(f"Excluding {len(played_song_ids)} already played songs")
+
+        logger.info("Step 7: Calculating composite embedding")
+        composite_embedding = calculate_composite_embedding(embeddings=embeddings)
+
+        logger.info("Step 8: Getting recommendations from Pinecone")
+        recommended_songs = recommend_songs(composite_embedding, played_song_ids, top_k=3)
+        
+        if not recommended_songs:
+            logger.warning("No recommendations returned from Pinecone")
+            return []
+        
+        logger.info(f"Got {len(recommended_songs)} recommendations from Pinecone")
+
+        logger.info("Step 9: Generating RAG recommendations")
+        openai_recommendations = rag_recommendations(recommended_songs)
+        
+        if not openai_recommendations:
+            logger.warning("No recommendations returned from RAG")
+            return []
+
+        logger.info("Step 10: Extracting song details from RAG response")
+        songs_info = extract_song_details(openai_recommendations)
+        logger.info(f"Extracted {len(songs_info)} final recommendations")
+
+        return songs_info
+        
+    except Exception as e:
+        logger.error(f"Error in perform_tasks: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise e
 
 
 def search_song(song_name, artist_name):
-    token = sp.auth_manager.get_access_token()
+    logger.info(f"Searching for song: '{song_name}' by '{artist_name}'")
+    
+    try:
+        token = sp.auth_manager.get_access_token()
 
-    url ='https://api.spotify.com/v1/search'
+        url ='https://api.spotify.com/v1/search'
 
-    headers = {
-        "Authorization": "Bearer " + token['access_token']
-    }
+        headers = {
+            "Authorization": "Bearer " + token['access_token']
+        }
 
-    query = f'track:{song_name} artist:{artist_name}'
+        query = f'track:{song_name} artist:{artist_name}'
+        logger.info(f"Search query: {query}")
 
-    params = {
-        'q':query,
-        'type':'track',
-        'limit':1
-    }
-    response = requests.get(url, headers=headers, params=params)
+        params = {
+            'q':query,
+            'type':'track',
+            'limit':1
+        }
+        response = requests.get(url, headers=headers, params=params)
+        logger.info(f"Spotify search API response status: {response.status_code}")
 
-    if response.status_code == 200:
-        results = response.json()
-        tracks = results.get("tracks", {}).get("items", [])
-        
-        if tracks:
-            track = tracks[0]
-            return {
-                "has_song": True,
-                "id": track["album"]['id'],
-                "name": track["name"],
-                "artist": track["artists"][0]["name"],
-                "album": track["album"]["name"],
-                "preview_url": track["preview_url"],
-                "uri": track["uri"],
-                "img_url": track["album"]["images"][0]["url"]
-            }
+        if response.status_code == 200:
+            results = response.json()
+            tracks = results.get("tracks", {}).get("items", [])
+            
+            if tracks:
+                track = tracks[0]
+                logger.info(f"Found song: {track['name']} by {track['artists'][0]['name']}")
+                return {
+                    "has_song": True,
+                    "id": track["album"]['id'],
+                    "name": track["name"],
+                    "artist": track["artists"][0]["name"],
+                    "album": track["album"]["name"],
+                    "preview_url": track["preview_url"],
+                    "uri": track["uri"],
+                    "img_url": track["album"]["images"][0]["url"] if track["album"]["images"] else None
+                }
+            else:
+                logger.warning(f"No tracks found for: {song_name} by {artist_name}")
+                return "No song found."
         else:
-            return "No song found."
-    else:
+            logger.error(f"Spotify search failed with status {response.status_code}: {response.text}")
+            return "Failed to search for the song."
+            
+    except Exception as e:
+        logger.error(f"Error searching for song '{song_name}' by '{artist_name}': {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return "Failed to search for the song."
     
 
@@ -628,51 +756,127 @@ def get_unique_recent_songs(recent_songs):
 
 @router.get("/get-recent-songs/")
 def get_recent_songs():
-    recent_songs = fetch_recent_tracks()
-    unique_songs = get_unique_recent_songs(recent_songs)
-    songs_data = []
-    for _,song in enumerate(unique_songs):
-        song_info = search_song(song['name'], song['artist'])
-        songs_data.append(song_info)
+    request_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    logger.info(f"[{request_id}] Starting get_recent_songs request")
     
-    return {"status":"success", "recent_songs":songs_data}
+    try:
+        logger.info(f"[{request_id}] Fetching recent tracks")
+        recent_songs = fetch_recent_tracks()
+        
+        logger.info(f"[{request_id}] Getting unique songs from {len(recent_songs)} tracks")
+        unique_songs = get_unique_recent_songs(recent_songs)
+        
+        logger.info(f"[{request_id}] Processing {len(unique_songs)} unique songs")
+        songs_data = []
+        
+        for i, song in enumerate(unique_songs):
+            try:
+                logger.info(f"[{request_id}] Processing song {i+1}/{len(unique_songs)}: {song['name']}")
+                song_info = search_song(song['name'], song['artist'])
+                songs_data.append(song_info)
+            except Exception as song_error:
+                logger.error(f"[{request_id}] Error processing song {song['name']}: {str(song_error)}")
+                songs_data.append({
+                    "has_song": False,
+                    "name": song['name'],
+                    "artist": song['artist'],
+                    "error": str(song_error)
+                })
+        
+        logger.info(f"[{request_id}] Successfully processed {len(songs_data)} recent songs")
+        return {
+            "status": "success", 
+            "recent_songs": songs_data,
+            "request_id": request_id,
+            "total_songs": len(songs_data)
+        }
+        
+    except Exception as e:
+        logger.error(f"[{request_id}] Error in get_recent_songs: {str(e)}")
+        logger.error(f"[{request_id}] Traceback: {traceback.format_exc()}")
+        return {
+            "status": "failed", 
+            "error": str(e),
+            "request_id": request_id,
+            "error_type": type(e).__name__
+        }
 
 
 @router.post("/music-recommender-api/")
 def music_recommender():
+    request_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    logger.info(f"[{request_id}] Starting music recommendation request")
+    
     try:
+        # Step 1: Fetch recent tracks
+        logger.info(f"[{request_id}] Step 1: Fetching recent tracks")
         recent_songs = fetch_recent_tracks()
-        # unique_songs = get_unique_recent_songs(recent_songs)
-        # songs_data = []
-        # for _,song in enumerate(unique_songs):
-        #     song_info = search_song(song['name'], song['artist'])
-        #     songs_data.append(song_info)
+        logger.info(f"[{request_id}] Fetched {len(recent_songs)} recent songs")
         
+        if not recent_songs:
+            logger.warning(f"[{request_id}] No recent songs found")
+            return {"status": "failed", "error": "No recent songs found"}
+        
+        # Step 2: Process tasks (main recommendation logic)
+        logger.info(f"[{request_id}] Step 2: Processing recommendation tasks")
         songs_info = perform_tasks(recent_songs)
-        print(songs_info)
-        # Display the recommended songs
-        print("### Recommended Songs:")
-        recommended_songs = []
-        for song in songs_info:
-            print(f"**Song**: {song['Song']} - **Artist**: {song['Artist']} - **Album**: {song['Album']}")
-
-            song_info = search_song(song['Song'], song['Artist'])
-            if song_info != "No song found.":
-                recommended_songs.append(song_info)
-                # create_playcard(song_info)
-            else:
-                recommended_songs.append({
-                                            "has_song": False,
-                                            "name": song["Song"],
-                                            "artist": song["Artist"]
-                                        })
-
-                print("Song is not on spotify!!!    :(")
-                print(f"**Song**: {song['Song']} - **Artist**: {song['Artist']}")
+        logger.info(f"[{request_id}] Generated {len(songs_info)} song recommendations")
         
-        return {"status":"success", "recommended_songs":recommended_songs}
+        if not songs_info:
+            logger.warning(f"[{request_id}] No recommendations generated")
+            return {"status": "failed", "error": "No recommendations could be generated"}
+        
+        # Step 3: Search for songs on Spotify
+        logger.info(f"[{request_id}] Step 3: Searching songs on Spotify")
+        recommended_songs = []
+        
+        for i, song in enumerate(songs_info):
+            try:
+                logger.info(f"[{request_id}] Processing song {i+1}/{len(songs_info)}: {song['Song']} by {song['Artist']}")
+                
+                song_info = search_song(song['Song'], song['Artist'])
+                
+                if song_info != "No song found." and song_info != "Failed to search for the song.":
+                    logger.info(f"[{request_id}] Found song on Spotify: {song['Song']}")
+                    recommended_songs.append(song_info)
+                else:
+                    logger.warning(f"[{request_id}] Song not found on Spotify: {song['Song']} by {song['Artist']}")
+                    recommended_songs.append({
+                        "has_song": False,
+                        "name": song["Song"],
+                        "artist": song["Artist"],
+                        "album": song.get("Album", "Unknown")
+                    })
+                    
+            except Exception as song_error:
+                logger.error(f"[{request_id}] Error processing song {song['Song']}: {str(song_error)}")
+                logger.error(f"[{request_id}] Song error traceback: {traceback.format_exc()}")
+                recommended_songs.append({
+                    "has_song": False,
+                    "name": song.get("Song", "Unknown"),
+                    "artist": song.get("Artist", "Unknown"),
+                    "error": str(song_error)
+                })
+        
+        logger.info(f"[{request_id}] Successfully processed {len(recommended_songs)} recommendations")
+        logger.info(f"[{request_id}] Request completed successfully")
+        
+        return {
+            "status": "success", 
+            "recommended_songs": recommended_songs,
+            "request_id": request_id,
+            "total_recommendations": len(recommended_songs)
+        }
+        
     except Exception as e:
-        return {"status":"failed", "error":str(e)}
+        logger.error(f"[{request_id}] Critical error in music_recommender: {str(e)}")
+        logger.error(f"[{request_id}] Full traceback: {traceback.format_exc()}")
+        return {
+            "status": "failed", 
+            "error": str(e),
+            "request_id": request_id,
+            "error_type": type(e).__name__
+        }
     
 
 @router.get("/get-user-playlists/")
